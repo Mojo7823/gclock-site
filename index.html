@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scenic Clock</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #a9d4f2; }
+    canvas { display: block; touch-action: none; } /* drag looks around, pinch zooms (main.js) */
+    [hidden] { display: none !important; }
+    .glass {
+      box-sizing: border-box; background: rgba(20, 28, 48, 0.35);
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+      color: #fff; font: 500 14px/1.4 system-ui, sans-serif; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+    button, select { font: inherit; color: inherit; background: rgba(255, 255, 255, 0.15); border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+    button:hover, select:hover { background-color: rgba(255, 255, 255, 0.25); }
+    :focus-visible { outline: 2px solid #ffd36b; outline-offset: 2px; }
+    /* drop-downs: a glass pill with a chevron; where the browser allows (appearance: base-select), a glass list too */
+    select {
+      appearance: none; padding-right: 30px; background-repeat: no-repeat; background-position: right 12px center;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23fff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    }
+    select option { color: #000; }
+    @supports (appearance: base-select) {
+      select, ::picker(select) { appearance: base-select; }
+      select { padding-right: 12px; background-image: none; }
+      select::picker-icon { content: '\2304'; font-size: 12px; transition: rotate 0.2s; }
+      select:open::picker-icon { rotate: 180deg; }
+      ::picker(select) {
+        margin-block: 6px; padding: 4px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 16px;
+        background: rgba(20, 28, 48, 0.55); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); color: #fff; font: 500 14px/1.4 system-ui, sans-serif;
+      }
+      select option { color: inherit; padding: 6px 12px; border-radius: 12px; }
+      select option:hover, select option:focus-visible { background: rgba(255, 255, 255, 0.2); outline: 0; }
+      select option:checked { background: rgba(255, 211, 107, 0.3); }
+      select option::checkmark { display: none; }
+    }
+    output { font-variant-numeric: tabular-nums; }
+
+    /* clock: drawn in WebGL (clock.js); this is its text for screen readers, visually hidden */
+    #clock-text { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+    /* debug menu (5 clicks on the bug button, or ?debug) */
+    #debug {
+      position: fixed; left: 50%; bottom: 68px; transform: translateX(-50%); width: min(720px, calc(100% - 32px));
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 18px; border-radius: 28px; line-height: 1;
+    }
+    #debug select { padding-block: 4px; padding-left: 10px; }
+    #debug #controls, #debug #time-controls { display: contents; }
+    #debug .row { flex: 1 1 200px; margin: 0; }
+    #debug #mix { flex-basis: 100%; text-align: left; font: 12px/1.3 ui-monospace, monospace; opacity: 0.85; white-space: pre-wrap; }
+    /* the bug button: invisible until the pointer comes near the bottom-left corner (ui.js), or it has focus */
+    #bug { position: fixed; left: 16px; bottom: 20px; width: 36px; height: 36px; padding: 0; display: grid; place-items: center; background: rgba(20, 28, 48, 0.2); opacity: 0; transition: opacity 0.3s; }
+    #bug.near, #bug:focus-visible, #bug[aria-expanded="true"] { opacity: 1; }
+    .row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; margin: 10px 0; }
+    .row input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0; height: 24px; accent-color: #ffd36b; cursor: pointer; }
+
+    /* (i) button and the sidebar */
+    #info { /* frosted white, 85% clear; 20% clear while the pointer is near (ui.js) or it has focus */
+      position: fixed; top: 16px; right: 16px; width: 44px; height: 44px; padding: 0;
+      border: 0; background: rgba(255, 255, 255, 0.15); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); transition: background 0.3s, color 0.3s;
+      font: italic 700 21px/1 Georgia, serif;
+    }
+    #info.near, #info:focus-visible, #info[aria-expanded="true"] { background: rgba(255, 255, 255, 0.8); color: #1d2436; text-shadow: none; }
+    #panel {
+      position: fixed; z-index: 1; top: 72px; right: 16px; width: min(380px, calc(100% - 32px)); max-height: calc(100% - 88px);
+      display: flex; flex-direction: column; border-radius: 24px; background: rgba(20, 28, 48, 0.4);
+    }
+    #panel header { position: absolute; top: 12px; right: 12px; } /* the close button, at the end of the tab row */
+    #panel h3 { margin: 14px 0 6px; font-size: 14px; }
+    #panel-close { width: 36px; height: 36px; padding: 0; font-size: 20px; line-height: 1; }
+    #panel [role="tablist"] { display: flex; flex-wrap: wrap; gap: 2px; padding: 12px 56px 8px 12px; }
+    #panel [role="tab"] { width: 36px; height: 36px; padding: 0; display: grid; place-items: center; background: none; }
+    @media (max-width: 380px) { #panel [role="tab"] { width: 32px; } } /* 8 tabs + the close button on one row */
+    #panel [role="tab"][aria-selected="true"] { background: rgba(255, 255, 255, 0.28); }
+    #panel section { overflow-y: auto; padding: 4px 20px 8px; }
+    #panel p { margin: 6px 0; }
+    #panel ul { margin: 0; padding-left: 18px; }
+    #panel li { margin: 4px 0; }
+    #panel a { color: #ffe39b; }
+    #panel .hint { opacity: 0.85; font-size: 13px; }
+    #panel input { accent-color: #ffd36b; }
+    #panel input[type="color"] { width: 44px; height: 28px; padding: 0; border: 0; background: none; cursor: pointer; }
+    #panel input[type="time"] { font: inherit; color: inherit; background: rgba(255, 255, 255, 0.15); border: 0; border-radius: 999px; padding: 4px 10px; color-scheme: dark; }
+    #panel .birds { margin: -4px 0 10px; font-size: 13px; }
+    #panel .birds summary { cursor: pointer; padding: 4px 0; opacity: 0.9; width: fit-content; }
+    #panel .birds div { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 12px; padding: 4px 0 0 4px; }
+    #panel .birds label { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; }
+    #panel .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+    #panel .primary { background: #ffd36b; color: #1d2436; text-shadow: none; font-weight: 600; }
+    #panel footer { padding: 8px 20px 16px; }
+    @media (max-width: 600px) { /* phones: a sheet across the bottom */
+      #panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 60%; border-radius: 24px 24px 0 0; } /* the clock stays visible above it */
+    }
+    @media (min-width: 601px) and (max-height: 500px) { /* landscape phones: the full height, beside the (i) button */
+      #panel { top: 8px; right: 68px; max-height: calc(100% - 16px); }
+    }
+
+    /* alarm: the ringing dialog (alarm.js), centred; frosted and almost clear with a thin light border and glow like the
+       reference's "Sleek Geometric" panel; a faint tint keeps the thin text readable on a bright sky. The first-visit
+       consent dialog (ui.js) shares the look */
+    #alarm, #consent {
+      box-sizing: border-box; min-width: min(340px, calc(100% - 32px)); max-width: calc(100% - 32px); padding: 18px 32px 26px; text-align: center;
+      border: 1px solid rgba(255, 244, 220, 0.6); border-radius: 28px; background: rgba(20, 28, 48, 0.12);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      box-shadow: 0 0 24px rgba(255, 233, 184, 0.3), inset 0 0 18px rgba(255, 244, 220, 0.15);
+      color: #fff4dc; font: 300 15px/1.3 system-ui, sans-serif; text-shadow: 0 0 8px rgba(255, 214, 140, 0.8), 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+    #alarm::backdrop, #consent::backdrop { background: rgba(10, 14, 28, 0.15); }
+    #alarm h2 { margin: 0; font: inherit; letter-spacing: 0.25em; text-transform: uppercase; opacity: 0.9; }
+    #alarm-at { margin: 2px 0 16px; font-size: clamp(44px, 14vw, 96px); font-weight: 200; line-height: 1.15; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    #alarm div, #consent .buttons { display: flex; gap: 12px; justify-content: center; }
+    #alarm button, #consent button {
+      flex: 1; max-width: 160px; padding: 10px 0; border: 1px solid rgba(255, 244, 220, 0.65); background: rgba(255, 255, 255, 0.06);
+      box-shadow: 0 0 10px rgba(255, 233, 184, 0.25); font-weight: 400; letter-spacing: 0.06em;
+    }
+    #alarm button:hover, #consent button:hover { background: rgba(255, 255, 255, 0.18); }
+    #consent { width: min(420px, calc(100% - 32px)); font-weight: 400; }
+    #consent p { margin: 0 0 12px; }
+    #consent .hint { font-size: 13px; opacity: 0.85; }
+    #consent .buttons { margin-top: 18px; }
+    #consent .places button { flex: none; max-width: none; padding: 8px 14px; }
+    /* the place search (ui.js placeSearch): the dialog's third step and the Location tab */
+    .place-search { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; text-align: left; }
+    .place-search input {
+      flex: 1; min-width: 0; font: inherit; color: inherit; background: rgba(255, 255, 255, 0.15); border: 0; border-radius: 999px; padding: 6px 12px;
+    }
+    #consent .place-search input { border: 1px solid rgba(255, 244, 220, 0.65); background: rgba(255, 255, 255, 0.06); }
+    .place-search p { margin: 0; }
+    .place-search p:empty { display: none; }
+    .place-search > :is(p, .places) { flex-basis: 100%; }
+    .places { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .places button { text-align: left; border-radius: 16px; overflow-wrap: anywhere; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/build/three.module.js",
+        "three/addons/": "./vendor/three/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <p id="clock-text" role="timer" aria-live="off"></p>
+  <button id="info" type="button" aria-label="Menu" aria-expanded="false" aria-controls="panel">i</button>
+  <aside id="panel" class="glass" aria-label="Menu" hidden>
+    <header><button id="panel-close" type="button" aria-label="Close">&times;</button></header>
+    <div role="tablist" aria-label="Settings">
+      <button role="tab" type="button" id="tab-camera" aria-controls="pane-camera" aria-label="Camera" title="Camera"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+      <button role="tab" type="button" id="tab-sound" aria-controls="pane-sound" aria-label="Sound" title="Sound"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg></button>
+      <button role="tab" type="button" id="tab-location" aria-controls="pane-location" aria-label="Location" title="Location"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="9" r="2.5"/></svg></button>
+      <button role="tab" type="button" id="tab-clock" aria-controls="pane-clock" aria-label="Clock" title="Clock"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></button>
+      <button role="tab" type="button" id="tab-alarm" aria-controls="pane-alarm" aria-label="Alarm" title="Alarm"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg></button>
+      <button role="tab" type="button" id="tab-settings" aria-controls="pane-settings" aria-label="Settings" title="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19.1 10.6 L21.5 10.9 L21.5 13.1 L19.1 13.4 L18.0 16.0 L19.6 17.9 L17.9 19.6 L16.0 18.0 L13.4 19.1 L13.1 21.5 L10.9 21.5 L10.6 19.1 L8.0 18.0 L6.1 19.6 L4.4 17.9 L6.0 16.0 L4.9 13.4 L2.5 13.1 L2.5 10.9 L4.9 10.6 L6.0 8.0 L4.4 6.1 L6.1 4.4 L8.0 6.0 L10.6 4.9 L10.9 2.5 L13.1 2.5 L13.4 4.9 L16.0 6.0 L17.9 4.4 L19.6 6.1 L18.0 8.0z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button role="tab" type="button" id="tab-changes" aria-controls="pane-changes" aria-label="Changelog" title="Changelog"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7M12 17v.5"/></svg></button>
+      <button role="tab" type="button" id="tab-credits" aria-controls="pane-credits" aria-label="Credits" title="Credits"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg></button>
+    </div>
+    <section role="tabpanel" id="pane-camera" aria-labelledby="tab-camera">
+      <div class="buttons"><button id="clock-view" type="button">Back to the clock view</button></div>
+    </section>
+    <section role="tabpanel" id="pane-sound" aria-labelledby="tab-sound"></section>
+    <section role="tabpanel" id="pane-location" aria-labelledby="tab-location">
+      <p class="hint">Local weather, sunrise and sunset for your approximate location (rounded to ~1 km) or a place you choose,
+        sent to Open-Meteo; GeoJS finds you by IP if your browser shares no location. Place search by Open-Meteo. Kept on this
+        device only if you accept cookies.</p>
+      <p id="loc-status" aria-live="polite"></p>
+      <div class="buttons"><button id="loc-yes" class="primary" type="button">Use my location</button><button id="loc-place" type="button"
+        aria-expanded="false" aria-controls="loc-search">Choose a place</button><button id="loc-off" type="button">Turn off</button></div>
+      <div id="loc-search" hidden></div>
+    </section>
+    <section role="tabpanel" id="pane-clock" aria-labelledby="tab-clock"></section>
+    <section role="tabpanel" id="pane-alarm" aria-labelledby="tab-alarm"></section>
+    <section role="tabpanel" id="pane-settings" aria-labelledby="tab-settings">
+      <p><label><input id="bypass-time" type="checkbox"> Bypass local time</label></p>
+      <div id="time-controls">
+        <div class="row"><label for="time">Time</label><output id="time-label" for="time" aria-live="off"></output><input id="time" type="range" min="0" max="1439" step="1" value="720"></div>
+      </div>
+      <p><label><input id="manual" type="checkbox"> Bypass location</label></p>
+      <div id="controls">
+        <div class="row"><label for="weather">Weather</label><select id="weather"></select></div>
+        <div class="row"><label for="wind">Wind</label><output id="wind-label" for="wind" aria-live="off"></output><input id="wind" type="range" min="0" max="20" step="0.5" value="3"></div>
+        <div class="row"><label for="winddir">Direction</label><output id="winddir-label" for="winddir" aria-live="off"></output><input id="winddir" type="range" min="0" max="345" step="15" value="15"></div>
+      </div>
+      <h3>Sound timing</h3>
+      <div id="timing"></div>
+      <h3>Nature</h3>
+      <div id="life"></div>
+      <h3>Quality</h3>
+      <p class="row"><label><input id="antialias" type="checkbox"> Antialiasing</label><span class="hint">on reload</span></p>
+    </section>
+    <section role="tabpanel" id="pane-changes" aria-labelledby="tab-changes">
+      <h3>Version</h3>
+      <p>v0.13</p>
+      <h3>Changelog</h3>
+      <p><strong>v0.13</strong> · 26 November 2026</p>
+      <ul>
+        <li>Faint far clouds on the horizon, drifting and changing slowly.</li>
+      </ul>
+      <p><strong>v0.12</strong> · 26 November 2026</p>
+      <ul>
+        <li>Opens about a third sooner.</li>
+        <li>A little lighter on the graphics chip again, with the same picture.</li>
+      </ul>
+      <p><strong>v0.11</strong> · 25 November 2026</p>
+      <ul>
+        <li>Smoother and cooler: about a quarter less work for the graphics chip, with the same picture.</li>
+        <li>Visits are counted now: a number per day, nothing about you.</li>
+      </ul>
+      <p><strong>v0.10</strong> · 3 November 2026</p>
+      <ul>
+        <li>Phones draw at 1.5× by default: cooler, still sharp. Settings → Quality → Resolution changes it.</li>
+        <li>The 3D engine now loads from this site, not a third-party server.</li>
+      </ul>
+      <p><strong>v0.9</strong> · 3 November 2026</p>
+      <ul>
+        <li>Runs cooler on phones and fast screens, with the same picture.</li>
+      </ul>
+      <p><strong>v0.8</strong> · 28 October 2026</p>
+      <ul>
+        <li>Raindrops on the glass when it rains: a few slow drops in light rain, many running streams in a storm, each drop showing the scene upside down, by day and by night. They drift with the wind, and fewer reach the glass when the wind blows from behind you. Settings → Quality → Rain on the glass turns them off.</li>
+        <li>Fireflies are small points of light now, closer to real life.</li>
+      </ul>
+      <p><strong>v0.7</strong> · 28 October 2026</p>
+      <ul>
+        <li>Real, soft three-dimensional clouds: sunlight shines through their thin edges, lights their tops and leaves their undersides in shade.</li>
+        <li>Cloud shadows on the land take the shape of the clouds, and sunbeams slant down through the gaps between them.</li>
+        <li>An overcast sky is a textured grey-white blanket above the mountain, and a crown of cloud swirls round the summit.</li>
+      </ul>
+      <p><strong>v0.6</strong> · 28 October 2026</p>
+      <ul>
+        <li>Distant rain falls in grey curtains over the valley on rainy and stormy days.</li>
+      </ul>
+      <p><strong>v0.5</strong> · 28 October 2026</p>
+      <ul>
+        <li>More butterflies and fireflies, and easier to see; fireflies stay out all night.</li>
+        <li>A softer wind that rises and falls; a stronger wind sound only on windy days.</li>
+        <li>A quieter river.</li>
+      </ul>
+      <p><strong>v0.4</strong> · 27 October 2026</p>
+      <ul>
+        <li>Sunbeams through the gaps in the clouds on partly cloudy days, most when the sun is low.</li>
+      </ul>
+      <p><strong>v0.3</strong> · 26 October 2026</p>
+      <ul>
+        <li>Butterflies visit the flowers on calm days and sometimes land on them.</li>
+        <li>Leaves drift down from the trees, more when the wind picks up, and float away on the river.</li>
+        <li>Fireflies glow along the river after sunset; dragonflies dart over the water on warm afternoons.</li>
+        <li>Choose how many butterflies, fireflies, dragonflies and falling leaves in Settings → Nature.</li>
+        <li>A quieter wind, and volume stabilization (on by default, in Settings) so storms don't blast.</li>
+      </ul>
+      <p><strong>v0.2</strong> · 25 October 2026</p>
+      <ul>
+        <li>The river mirrors the trees, the mountain and the sky, and flows around its rocks.</li>
+        <li>Trees cast leafy shadows that sway with the wind.</li>
+        <li>Sudden gusts, as strong as your local forecast says: you see the trees bend and hear the wind rise.</li>
+        <li>A new wind sound, close thunder louder, and birds visit a little more often.</li>
+        <li>Slower device? Turn reflections or tree shadows off in Settings.</li>
+      </ul>
+      <p><strong>v0.1</strong> · 25 October 2026, the first release</p>
+      <ul>
+        <li>A meadow that follows your real day: dawn, sunrise, sunset and night come when they do where you are.</li>
+        <li>Your local weather, live: sun, clouds, rain, storms with lightning, and wind from its real direction.</li>
+        <li>A clock in the sky: digital or analog, six fonts, behind the mountain or in front of everything, in your colours.</li>
+        <li>An alarm that wakes you with a rooster, with snooze.</li>
+        <li>Nature sounds all around you: birds that come and go, crickets and frogs at night, bees, wind, rain, the river, thunder.</li>
+        <li>A night sky with the real moon phase, stars, the Milky Way and a few shooting stars.</li>
+        <li>Drag to look around; zoom with the wheel or a pinch.</li>
+        <li>Choose a place instead of sharing your location. Your settings stay on your device.</li>
+      </ul>
+    </section>
+    <section role="tabpanel" id="pane-credits" aria-labelledby="tab-credits"></section>
+    <footer><button id="reset" type="button">Reset to defaults</button></footer>
+  </aside>
+
+  <button id="bug" type="button" aria-label="Debug menu (press 5 times)" title="Debug" aria-expanded="false" aria-controls="debug">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <path d="M9 7.5V6a3 3 0 0 1 6 0v1.5M8 9h8v6a4 4 0 0 1-8 0zM12 9v10M3 13h5M16 13h5M4 8l4 2M20 8l-4 2M4 19l4-2M20 19l-4-2"/>
+    </svg>
+  </button>
+  <div id="debug" class="glass" hidden>
+    <select id="view" aria-label="Camera view"></select>
+    <button id="live" type="button">Back to live</button>
+    <output id="mix" aria-live="off" hidden></output>
+  </div>
+  <dialog id="consent">
+    <section id="consent-cookies">
+      <p id="consent-cookies-q">This site uses cookies to save your settings on this device.</p>
+      <div class="buttons"><button id="cookies-yes" type="button">Accept</button><button id="cookies-no" type="button">Decline</button></div>
+    </section>
+    <section id="consent-location" hidden>
+      <p id="consent-location-q">Use your approximate location for local weather, sunrise and sunset?</p>
+      <p class="hint">From your browser or your IP address (GeoJS), rounded to ~1 km and sent to Open-Meteo.</p>
+      <div class="buttons"><button id="consent-allow" type="button">Allow</button><button id="consent-choose" type="button">Choose a place</button></div>
+    </section>
+    <section id="consent-place" hidden>
+      <p id="consent-place-q">Choose a place</p>
+      <div class="buttons"><button id="consent-skip" type="button">Skip</button></div>
+    </section>
+  </dialog>
+  <dialog id="alarm" role="alertdialog" aria-labelledby="alarm-title" aria-describedby="alarm-at">
+    <h2 id="alarm-title">Alarm</h2>
+    <p id="alarm-at"></p>
+    <div><button id="alarm-snooze" type="button">Snooze</button><button id="alarm-dismiss" type="button">Dismiss</button></div>
+  </dialog>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
